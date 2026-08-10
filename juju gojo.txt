@@ -38,7 +38,7 @@ local Window = WindUI:CreateWindow({
    SideBarWidth = 200, -- sidebar (tabs) width
    HideSearchBar = true, -- hide search bar
    ScrollBarEnabled = false, -- scrollbars that are located to the right of the scroll frame
-   BackgroundImageTransparency = 0.15, -- background image transparency
+   BackgroundImageTransparency = 0.45, -- background image transparency
    Background = "rbxassetid://99965036348094", -- rbxassetid   
 })
   
