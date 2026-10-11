@@ -26,7 +26,7 @@ do
 end
 
 local Window = WindUI:CreateWindow({
-   Title = "khanhly OP", -- window title
+   Title = "khanhly OP free", -- window title
     Icon = "rbxassetid://132147561870079", -- lucide icon or "rbxassetid://" or URL. optional
    Author = "khanhly", -- window subtitle. optional
    Folder = "khanhlydepzai", -- folder to save keys and images  
@@ -38,7 +38,7 @@ local Window = WindUI:CreateWindow({
    SideBarWidth = 200, -- sidebar (tabs) width
    HideSearchBar = true, -- hide search bar
    ScrollBarEnabled = false, -- scrollbars that are located to the right of the scroll frame
-   BackgroundImageTransparency = 0.45, -- background image transparency
+   BackgroundImageTransparency = 0.65, -- background image transparency
    Background = "rbxassetid://99965036348094", -- rbxassetid   
 })
   
@@ -160,368 +160,520 @@ InfoTab:Paragraph({
    
    local Tab = Window:Tab({ Title = "OP strongest" })
    local EXPTab = Window:Tab({ Title = "EXPER" })
-local SttTab = Window:Tab({ Title = "Setting" })
-   local SevTab = Window:Tab({ Title = "Not come :))" })
+   local SttTab = Window:Tab({ Title = "Setting" })
+   local CmTab = Window:Tab({ Title = "fps+sever" })
+   
 
+do
+    local Players     = game:GetService("Players")
+    local RunService  = game:GetService("RunService")
+    local LocalPlayer = Players.LocalPlayer
+    local Mouse       = LocalPlayer:GetMouse()
 
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local LocalPlayer = Players.LocalPlayer
-local Camera = workspace.CurrentCamera
+    local FOV_PIXELS        = 150
+    local CAMLOCK_RADIUS    = 80
+    local MIN_PRED          = 0.05
+    local MAX_PRED          = 0.22
+    local CAM_MIN_ALPHA     = 0.10
+    local CAM_MAX_ALPHA     = 0.45
+    local CAM_Y_OFFSET      = 1.2
+    local ROT_LERP_ALPHA    = 0.28
+    local MIN_FLAT_DIST     = 1.5
+    local MIN_CAM_DIST      = 2.5
+    local GRACE_TIME        = 0.22
 
-local LOCK_DISTANCE = 80
-local CAM_LOCK_DISTANCE = 120
-local CAM_PREDICTION = 0.12
-local CAM_SMOOTHNESS = 0.18
+    local SilentAimEnabled = false
+    local CamLockEnabled   = false
+    local ActiveTarget     = nil
+    local DropdownTarget   = nil
+    local LastSilentPos    = nil
+    local LastCamPos       = nil
+    local LastSilentTime   = 0
+    local LastCamTime      = 0
 
-local SilentAimEnabled = false
-local CamLockEnabled = false
-local CurrentTarget = nil
-local CamlockTarget = nil
-local CamLastValid = 0
-local CamGrace = 0.25
+    local highlight, line, fovCircle
+    local lineFailed = false
 
-local redHighlight = nil
-local lineDrawing = nil
+    local uiDropdown, uiToggleSilent, uiToggleCam
+    local suppressSilent, suppressCam = false, false
 
-local suppressSilentCallback = false
-local suppressCamCallback = false
+    local connUpdate
+    local lastFrameTime = tick()
 
-local function CreateRedHighlight()
-    if redHighlight then redHighlight:Destroy() end
-    redHighlight = Instance.new("Highlight")
-    redHighlight.FillColor = Color3.fromRGB(255, 0, 0)
-    redHighlight.OutlineColor = Color3.fromRGB(255, 255, 255)
-    redHighlight.FillTransparency = 0.1
-    redHighlight.OutlineTransparency = 0.2
-    redHighlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    redHighlight.Enabled = false
-    redHighlight.Parent = game:GetService("CoreGui")
-end
-
-local function CreateLineDrawing()
-    if lineDrawing then lineDrawing:Remove() end
-    lineDrawing = Drawing.new("Line")
-    lineDrawing.Color = Color3.fromRGB(255, 0, 0)
-    lineDrawing.Thickness = 2
-    lineDrawing.Transparency = 0.8
-    lineDrawing.Visible = false
-end
-
-local function RemoveVisuals()
-    if redHighlight then
-        redHighlight.Enabled = false
-        redHighlight.Adornee = nil
-    end
-    if lineDrawing then
-        lineDrawing.Visible = false
-    end
-end
-
-local function UpdateVisuals(targetPlayer)
-    if not redHighlight then CreateRedHighlight() end
-    if targetPlayer and targetPlayer.Character then
-        redHighlight.Adornee = targetPlayer.Character
-        redHighlight.Enabled = true
-    else
-        redHighlight.Enabled = false
-        redHighlight.Adornee = nil
-    end
-end
-
-local function UpdateLineDrawing(aimPos)
-    if not lineDrawing then CreateLineDrawing() end
-    if not aimPos or not (SilentAimEnabled or CamLockEnabled) then
-        lineDrawing.Visible = false
-        return
-    end
-    local cam = Camera
-    if not cam then
-        lineDrawing.Visible = false
-        return
-    end
-    local targetScreenPos, targetOnScreen = cam:WorldToScreenPoint(aimPos)
-    if targetOnScreen then
-        local screenSize = cam.ViewportSize
-        local startPos = Vector2.new(screenSize.X / 2, 0)
-        lineDrawing.From = startPos
-        lineDrawing.To = Vector2.new(targetScreenPos.X, targetScreenPos.Y)
-        lineDrawing.Visible = true
-    else
-        lineDrawing.Visible = false
-    end
-end
-
-local function Notify(title, content, icon, duration)
-    if type(WindUI.Notify) == "function" then
-        WindUI:Notify({ Title = title, Content = content, Icon = icon or "info", Duration = duration or 2 })
-    end
-end
-
-local function GetPlayerNames()
-    local names = {}
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer then table.insert(names, p.Name) end
-    end
-    table.sort(names)
-    return names
-end
-
-local function GetPlayerByName(name)
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p.Name == name and p ~= LocalPlayer then return p end
-    end
-    return nil
-end
-
-local function GetClosestPlayerByDistance()
-    local char = LocalPlayer.Character
-    if not char or not char:FindFirstChild("HumanoidRootPart") then return nil end
-    local root = char.HumanoidRootPart
-    local nearest, minDist = nil, LOCK_DISTANCE
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p == LocalPlayer then continue end
-        local hrp = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
-        local hum = p.Character and p.Character:FindFirstChildOfClass("Humanoid")
-        if hrp and hum and hum.Health > 0 then
-            local d = (hrp.Position - root.Position).Magnitude
-            if d < minDist then
-                minDist = d
-                nearest = p
-            end
+    local function Notify(title, content, icon, duration)
+        if WindUI and type(WindUI.Notify) == "function" then
+            pcall(function()
+                WindUI:Notify({
+                    Title    = title,
+                    Content  = content,
+                    Icon     = icon or "info",
+                    Duration = duration or 2,
+                })
+            end)
+        else
+            print(("[AIM][%s] %s"):format(title, content))
         end
     end
-    return nearest
-end
 
-local function CamIsValid(plr)
-    if not plr or not plr.Character then return false end
-    local hum = plr.Character:FindFirstChildOfClass("Humanoid")
-    local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
-    if not hum or not hrp then return false end
-    if hum.Health <= 0 then return false end
-    local myChar = LocalPlayer.Character
-    if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return false end
-    return (hrp.Position - myChar.HumanoidRootPart.Position).Magnitude <= CAM_LOCK_DISTANCE
-end
+    local function getPlayerNames()
+        local names = {}
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LocalPlayer then table.insert(names, p.Name) end
+        end
+        table.sort(names)
+        return names
+    end
 
-local function CamFindTarget()
-    local myChar = LocalPlayer.Character
-    if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return nil end
-    local root = myChar.HumanoidRootPart
-    local nearest, bestDist = nil, CAM_LOCK_DISTANCE
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character then
-            local hum = plr.Character:FindFirstChildOfClass("Humanoid")
-            local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
-            if hum and hrp and hum.Health > 0 then
-                local d = (hrp.Position - root.Position).Magnitude
-                if d < bestDist then
-                    bestDist = d
-                    nearest = plr
+    local function getMyChar() return LocalPlayer.Character end
+    local function getMyHRP()
+        local c = getMyChar()
+        return c and c:FindFirstChild("HumanoidRootPart") or nil
+    end
+
+    local function getAlive(plr)
+        if not plr or plr == LocalPlayer then return nil end
+        if plr.Parent ~= Players then return nil end
+        local char = plr.Character
+        if not char then return nil end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then return nil end
+        return char
+    end
+
+    local function isUsable(plr) return getAlive(plr) ~= nil end
+
+    local function getSilentAimPart(plr)
+        local char = getAlive(plr)
+        if not char then return nil end
+        return char:FindFirstChild("Head")
+            or char:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function getCamAimPos(char)
+        local head = char:FindFirstChild("Head")
+        local hrp  = char:FindFirstChild("HumanoidRootPart")
+        if head and hrp then
+            local p = head.Position:Lerp(hrp.Position, 0.4)
+            return Vector3.new(p.X, p.Y + CAM_Y_OFFSET, p.Z)
+        end
+        return (head and head.Position) or (hrp and hrp.Position)
+    end
+
+    local function getPrediction()
+        local ping = 0
+        pcall(function() ping = LocalPlayer:GetNetworkPing() end)
+        return math.clamp(ping * 0.5 + 0.05, MIN_PRED, MAX_PRED)
+    end
+
+    local function findTargetByFOV()
+        local cam = workspace.CurrentCamera
+        if not cam then return nil end
+        local center = Vector2.new(
+            cam.ViewportSize.X * 0.5, cam.ViewportSize.Y * 0.5)
+        local bestD, bestPlr = math.huge, nil
+        for _, plr in ipairs(Players:GetPlayers()) do
+            local char = getAlive(plr)
+            if char then
+                local part = char:FindFirstChild("Head")
+                    or char:FindFirstChild("HumanoidRootPart")
+                if part then
+                    local sp, onScreen = cam:WorldToViewportPoint(part.Position)
+                    if onScreen then
+                        local d = (center - Vector2.new(sp.X, sp.Y)).Magnitude
+                        if d < bestD and d <= FOV_PIXELS then
+                            bestD, bestPlr = d, plr
+                        end
+                    end
                 end
             end
         end
-    end
-    return nearest
-end
-
-local aimCamConnection = nil
-
-local function aimCamUpdate()
-    if SilentAimEnabled then
-        local char = LocalPlayer.Character
-        if char and char:FindFirstChild("HumanoidRootPart") then
-            if not CurrentTarget
-                or not CurrentTarget.Character
-                or not CurrentTarget.Character:FindFirstChild("Humanoid")
-                or CurrentTarget.Character.Humanoid.Health <= 0
-            then
-                CurrentTarget = GetClosestPlayerByDistance()
-            end
-
-            if CurrentTarget and CurrentTarget.Character then
-                local targetHRP = CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
-                if targetHRP then
-                    char.HumanoidRootPart.CFrame = CFrame.new(
-                        char.HumanoidRootPart.Position,
-                        Vector3.new(targetHRP.Position.X, char.HumanoidRootPart.Position.Y, targetHRP.Position.Z)
-                    )
-                    UpdateVisuals(CurrentTarget)
-                    local aimPos = targetHRP.Position + targetHRP.AssemblyLinearVelocity * CAM_PREDICTION
-                    UpdateLineDrawing(aimPos)
-                end
-            else
-                RemoveVisuals()
-                CurrentTarget = nil
-            end
-        end
-    else
-        CurrentTarget = nil
+        return bestPlr
     end
 
-    if CamLockEnabled then
-        if not CamIsValid(CamlockTarget) then
-            if tick() - CamLastValid < CamGrace then return end
-            CamlockTarget = CamFindTarget()
-            if not CamlockTarget then
-                if not SilentAimEnabled then RemoveVisuals() end
-                return
-            end
-        end
-
-        CamLastValid = tick()
-        local hrp = CamlockTarget.Character:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            local predicted = hrp.Position + hrp.AssemblyLinearVelocity * CAM_PREDICTION
-            local currentCF = Camera.CFrame
-            local targetCF = CFrame.new(currentCF.Position, predicted)
-            Camera.CFrame = currentCF:Lerp(targetCF, CAM_SMOOTHNESS)
-
-            UpdateVisuals(CamlockTarget)
-            UpdateLineDrawing(predicted)
-        end
-    else
-        CamlockTarget = nil
-    end
-
-    if not SilentAimEnabled and not CamLockEnabled then
-        RemoveVisuals()
-    end
-end
-
-local function safeSetSilentToggle(value)
-    if not toggleSilent then return end
-    suppressSilentCallback = true
-    pcall(function() toggleSilent:SetValue(value) end)
-    suppressSilentCallback = false
-end
-
-local function safeSetCamToggle(value)
-    if not toggleCam then return end
-    suppressCamCallback = true
-    pcall(function() toggleCam:SetValue(value) end)
-    suppressCamCallback = false
-end
-
-local function updateAimCamConnection()
-    if SilentAimEnabled or CamLockEnabled then
-        if not aimCamConnection then
-            aimCamConnection = RunService.RenderStepped:Connect(aimCamUpdate)
-        end
-    else
-        if aimCamConnection then
-            aimCamConnection:Disconnect()
-            aimCamConnection = nil
-        end
-        RemoveVisuals()
-    end
-end
-
-local function SetSilentAim(value)
-    SilentAimEnabled = value
-    updateAimCamConnection()
-end
-
-local function SetCamLock(value)
-    CamLockEnabled = value
-    updateAimCamConnection()
-end
-
-local dropdown = Tab:Dropdown({
-    Title = "Check Player",
-    Values = GetPlayerNames(),
-    Value = GetPlayerNames()[1] or "No players",
-    Multi = false,
-    Locked = false,
-    Flag = "my_dropdown",
-    Callback = function(selected)
-        if selected and selected ~= "No players" then
-            local plr = GetPlayerByName(selected)
-            if plr then
-                CurrentTarget = plr
-                CamlockTarget = plr
-                UpdateVisuals(plr)
-                if plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-                    local aimPos = plr.Character.HumanoidRootPart.Position + plr.Character.HumanoidRootPart.AssemblyLinearVelocity * CAM_PREDICTION
-                    UpdateLineDrawing(aimPos)
+    local function findTargetByMouse()
+        local origin = Mouse.Hit and Mouse.Hit.Position
+        if not origin then return nil end
+        local bestD, bestPlr = math.huge, nil
+        for _, plr in ipairs(Players:GetPlayers()) do
+            local char = getAlive(plr)
+            if char then
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local d = (origin - hrp.Position).Magnitude
+                    if d < bestD and d <= CAMLOCK_RADIUS then
+                        bestD, bestPlr = d, plr
+                    end
                 end
             end
         end
+        return bestPlr
     end
-})
 
-local toggleSilent = Tab:Toggle({
-    Title = "Silent Aim",
-    Value = false,
-    Callback = function(value)
-        if suppressSilentCallback then return end
-        SetSilentAim(value)
-        Notify("Silent Aim", value and "ON" or "OFF", "target")
+    local function resolveTarget()
+        if isUsable(DropdownTarget) then return DropdownTarget end
+        if SilentAimEnabled and CamLockEnabled then
+            return findTargetByFOV() or findTargetByMouse()
+        elseif SilentAimEnabled then
+            return findTargetByFOV()
+        else
+            return findTargetByMouse()
+        end
     end
-})
 
-local toggleCam = Tab:Toggle({
-    Title = "Cam Lock",
-    Value = false,
-    Callback = function(value)
-        if suppressCamCallback then return end
-        SetCamLock(value)
-        Notify("Cam Lock", value and "ON" or "OFF", "camera")
+    local function destroyHighlight()
+        if highlight then highlight:Destroy(); highlight = nil end
     end
-})
 
-Tab:Button({
-    Title = "Refresh Player",
-    Callback = function()
-        local names = GetPlayerNames()
-        if #names == 0 then names = {"No players"} end
-        pcall(function() dropdown:SetValues(names) end)
-        Notify("Refresh", "Player list updated.", "refresh-cw")
+    local function ensureHighlight()
+        if highlight and highlight.Parent then return end
+        destroyHighlight()
+        local h = Instance.new("Highlight")
+        h.FillColor, h.OutlineColor              = Color3.fromRGB(255, 0, 0), Color3.fromRGB(255, 255, 255)
+        h.FillTransparency, h.OutlineTransparency = 0.1, 0.2
+        h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        h.Enabled   = false
+        local ok = pcall(function() h.Parent = game:GetService("CoreGui") end)
+        if not ok then
+            local pg = LocalPlayer:FindFirstChild("PlayerGui")
+            h.Parent = pg or workspace
+        end
+        highlight = h
     end
-})
 
-Tab:Button({
-    Title = "Closest Player",
-    Callback = function()
-        local nearest = GetClosestPlayerByDistance()
-        if not nearest then
-            Notify("Error", "No Player", "x-circle")
+    local function ensureLine()
+        if line or lineFailed then return end
+        local ok, l = pcall(function()
+            local nl = Drawing.new("Line")
+            nl.Color, nl.Thickness, nl.Transparency, nl.Visible =
+                Color3.fromRGB(255, 0, 0), 2, 0.8, false
+            return nl
+        end)
+        if ok then line = l else lineFailed = true end
+    end
+
+    local function ensureFovCircle()
+        if fovCircle or lineFailed then return end
+        local ok, c = pcall(function()
+            local nc = Drawing.new("Circle")
+            nc.Thickness, nc.NumSides, nc.Radius = 1, 64, FOV_PIXELS
+            nc.Color, nc.Filled, nc.Transparency, nc.Visible =
+                Color3.fromRGB(255, 255, 255), false, 0.5, false
+            return nc
+        end)
+        if ok then fovCircle = c end
+    end
+
+    local function clearVisuals()
+        if highlight then highlight.Enabled = false; highlight.Adornee = nil end
+        if line      then line.Visible      = false end
+        if fovCircle then fovCircle.Visible = false end
+    end
+
+    local function updateVisuals(target, aimPos)
+        ensureHighlight()
+        if target and target.Character then
+            highlight.Adornee = target.Character
+            highlight.Enabled = true
+        else
+            highlight.Enabled = false
+            highlight.Adornee = nil
+        end
+
+        ensureLine()
+        if line and aimPos and (SilentAimEnabled or CamLockEnabled) then
+            local cam = workspace.CurrentCamera
+            if cam then
+                local sp, onScreen = cam:WorldToViewportPoint(aimPos)
+                if onScreen then
+                    local vs = cam.ViewportSize
+                    line.From    = Vector2.new(vs.X * 0.5, vs.Y * 0.5)
+                    line.To      = Vector2.new(sp.X, sp.Y)
+                    line.Visible = true
+                else
+                    line.Visible = false
+                end
+            end
+        elseif line then
+            line.Visible = false
+        end
+
+        ensureFovCircle()
+        if fovCircle and SilentAimEnabled then
+            local cam = workspace.CurrentCamera
+            if cam then
+                fovCircle.Position = Vector2.new(
+                    cam.ViewportSize.X * 0.5, cam.ViewportSize.Y * 0.5)
+                fovCircle.Visible = true
+            end
+        elseif fovCircle then
+            fovCircle.Visible = false
+        end
+    end
+
+    local function onUpdate()
+        if not SilentAimEnabled and not CamLockEnabled then
+            clearVisuals()
             return
         end
-        CurrentTarget = nearest
-        CamlockTarget = nearest
-        pcall(function() dropdown:SetValue(nearest.Name) end)
-        UpdateVisuals(nearest)
-        if nearest.Character and nearest.Character:FindFirstChild("HumanoidRootPart") then
-            local aimPos = nearest.Character.HumanoidRootPart.Position + nearest.Character.HumanoidRootPart.AssemblyLinearVelocity * CAM_PREDICTION
-            UpdateLineDrawing(aimPos)
+
+        local now = tick()
+        local dt  = math.clamp(now - lastFrameTime, 0.001, 0.1)
+        lastFrameTime = now
+
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+
+        if not isUsable(ActiveTarget) then
+            ActiveTarget = resolveTarget()
         end
 
-        if not SilentAimEnabled then
-            SetSilentAim(true)
-            safeSetSilentToggle(true)
+        local char = getAlive(ActiveTarget)
+        if not char then
+            local didGrace = false
+
+            if SilentAimEnabled and LastSilentPos
+                and (now - LastSilentTime) < GRACE_TIME
+            then
+                local myHRP = getMyHRP()
+                if myHRP then
+                    local flat = Vector3.new(
+                        LastSilentPos.X - myHRP.Position.X, 0,
+                        LastSilentPos.Z - myHRP.Position.Z)
+                    if flat.Magnitude > MIN_FLAT_DIST then
+                        local cf = CFrame.new(myHRP.Position,
+                            myHRP.Position + flat.Unit)
+                        myHRP.CFrame = myHRP.CFrame:Lerp(cf, ROT_LERP_ALPHA)
+                    end
+                end
+                didGrace = true
+            end
+
+            if CamLockEnabled and LastCamPos
+                and (now - LastCamTime) < GRACE_TIME
+            then
+                local cur = cam.CFrame
+                if (LastCamPos - cur.Position).Magnitude > MIN_CAM_DIST then
+                    cam.CFrame = cur:Lerp(
+                        CFrame.new(cur.Position, LastCamPos), CAM_MIN_ALPHA)
+                end
+                didGrace = true
+            end
+
+            if didGrace then
+                updateVisuals(ActiveTarget, LastCamPos or LastSilentPos)
+                return
+            end
+
+            ActiveTarget    = nil
+            LastSilentPos   = nil
+            LastCamPos      = nil
+            clearVisuals()
+            return
         end
-        if not CamLockEnabled then
-            SetCamLock(true)
-            safeSetCamToggle(true)
+
+        local pred = getPrediction()
+
+        if SilentAimEnabled then
+            local part = getSilentAimPart(ActiveTarget)
+            if part then
+                local aimPos = part.Position
+                local myHRP  = getMyHRP()
+                if myHRP then
+                    local flat = Vector3.new(
+                        aimPos.X - myHRP.Position.X, 0,
+                        aimPos.Z - myHRP.Position.Z)
+                    if flat.Magnitude > MIN_FLAT_DIST then
+                        local cf = CFrame.new(myHRP.Position,
+                            myHRP.Position + flat.Unit)
+                        myHRP.CFrame = myHRP.CFrame:Lerp(cf, ROT_LERP_ALPHA)
+                    end
+                end
+                LastSilentPos, LastSilentTime = aimPos, now
+            end
         end
 
-        Notify("Target", "Locked on " .. nearest.Name, "target")
-    end
-})
+        if CamLockEnabled then
+            local basePos = getCamAimPos(char)
+            if basePos then
+                local hrp    = char:FindFirstChild("HumanoidRootPart")
+                local aimPos = hrp
+                    and (basePos + hrp.AssemblyLinearVelocity * pred)
+                    or basePos
 
-Players.PlayerRemoving:Connect(function(plr)
-    if CurrentTarget == plr then
-        CurrentTarget = nil
-    end
-    if CamlockTarget == plr then
-        CamlockTarget = nil
-    end
-end)
+                local cur = cam.CFrame
+                local dir = aimPos - cur.Position
+                local dist = dir.Magnitude
 
-CreateRedHighlight()
-CreateLineDrawing()
+                if dist > MIN_CAM_DIST then
+                    local dot   = math.clamp(cur.LookVector:Dot(dir.Unit), -1, 1)
+                    local angle = math.acos(dot)
+                    local base  = CAM_MIN_ALPHA + (CAM_MAX_ALPHA - CAM_MIN_ALPHA)
+                                  * math.clamp(angle / math.pi, 0, 1)
+                    local alpha = math.clamp(base * (dt / 0.016), 0.05, 0.7)
+                    cam.CFrame = cur:Lerp(CFrame.new(cur.Position, aimPos), alpha)
+                end
+                LastCamPos, LastCamTime = aimPos, now
+            end
+        end
+
+        updateVisuals(ActiveTarget, LastCamPos or LastSilentPos)
+    end
+
+    local function updateConnection()
+        local shouldRun = SilentAimEnabled or CamLockEnabled
+        if shouldRun then
+            if not connUpdate then
+                lastFrameTime = tick()
+                connUpdate = RunService.Heartbeat:Connect(function()
+                    local ok, err = pcall(onUpdate)
+                    if not ok then warn("[AIM] onUpdate:", err) end
+                end)
+            end
+        else
+            if connUpdate then connUpdate:Disconnect(); connUpdate = nil end
+            ActiveTarget, LastSilentPos, LastCamPos = nil, nil, nil
+            clearVisuals()
+        end
+    end
+
+    local function setSilent(v)
+        SilentAimEnabled = v
+        ActiveTarget = nil
+        updateConnection()
+    end
+    local function setCam(v)
+        CamLockEnabled = v
+        ActiveTarget = nil
+        updateConnection()
+    end
+
+    local HAS_TOGGLE_SET, HAS_DROP_SET, HAS_DROP_SETVALUES
+
+    local function detectUISync()
+        HAS_TOGGLE_SET = type(uiToggleSilent) == "table"
+            and type(uiToggleSilent.SetValue) == "function"
+        HAS_DROP_SET = type(uiDropdown) == "table"
+            and type(uiDropdown.SetValue) == "function"
+        HAS_DROP_SETVALUES = type(uiDropdown) == "table"
+            and type(uiDropdown.SetValues) == "function"
+    end
+
+    local function syncToggleSilent(v)
+        if not HAS_TOGGLE_SET or not uiToggleSilent then return end
+        suppressSilent = true
+        local ok, err = pcall(function() uiToggleSilent:SetValue(v) end)
+        suppressSilent = false
+        if not ok then warn("[AIM] silent sync:", err) end
+    end
+    local function syncToggleCam(v)
+        if not HAS_TOGGLE_SET or not uiToggleCam then return end
+        suppressCam = true
+        local ok, err = pcall(function() uiToggleCam:SetValue(v) end)
+        suppressCam = false
+        if not ok then warn("[AIM] cam sync:", err) end
+    end
+    local function syncDropdown(v)
+        if not HAS_DROP_SET or not uiDropdown then return end
+        pcall(function() uiDropdown:SetValue(v) end)
+    end
+
+    local function refreshDropdownValues(manual)
+        if not uiDropdown then return end
+        local names = getPlayerNames()
+        if HAS_DROP_SETVALUES then
+            local ok, err = pcall(function() uiDropdown:SetValues(names) end)
+            if manual then
+                if ok then
+                    Notify("Refresh", "Đã cập nhật danh sách player", "refresh-cw", 2)
+                else
+                    Notify("Refresh", "Lỗi: " .. tostring(err), "x-circle", 3)
+                end
+            end
+        else
+            if manual then
+                Notify("Refresh",
+                    "WindUI không hỗ trợ cập nhật list — cần reload script",
+                    "alert-triangle", 3)
+            end
+        end
+    end
+
+    uiDropdown = Tab:Dropdown({
+        Title    = "Target (Dropdown)",
+        Desc     = "Chọn cứng mục tiêu. Ưu tiên cao hơn FOV/mouse.",
+        Values   = getPlayerNames(),
+        Multi    = false,
+        Locked   = false,
+        Flag     = "aim_dropdown",
+        Callback = function(selected)
+            if type(selected) == "table" then selected = selected[1] end
+            DropdownTarget = (selected and selected ~= "")
+                and Players:FindFirstChild(selected) or nil
+            ActiveTarget = nil
+        end
+    })
+
+    uiToggleSilent = Tab:Toggle({
+        Title    = "Silent Aim (Head — tâm player)",
+        Value    = false,
+        Callback = function(v)
+            if suppressSilent then return end
+            setSilent(v)
+            Notify("Silent Aim", v and "ON" or "OFF", "target")
+        end
+    })
+
+    uiToggleCam = Tab:Toggle({
+        Title    = "Cam Lock (bám ngực/đầu)",
+        Value    = false,
+        Callback = function(v)
+            if suppressCam then return end
+            setCam(v)
+            Notify("Cam Lock", v and "ON" or "OFF", "camera")
+        end
+    })
+
+    Tab:Button({
+        Title    = "Refresh Players",
+        Callback = function() refreshDropdownValues(true) end
+    })
+
+    Tab:Button({
+        Title    = "Reset All",
+        Callback = function()
+            SilentAimEnabled, CamLockEnabled = false, false
+            DropdownTarget, ActiveTarget     = nil, nil
+            LastSilentPos, LastCamPos        = nil, nil
+            updateConnection()
+            clearVisuals()
+            destroyHighlight()
+            if line      then line:Remove();      line = nil; lineFailed = false end
+            if fovCircle then fovCircle:Remove(); fovCircle = nil end
+            syncToggleSilent(false)
+            syncToggleCam(false)
+            syncDropdown("")
+            Notify("Reset", "Đã tắt tất cả", "power")
+        end
+    })
+
+    Players.PlayerRemoving:Connect(function(plr)
+        if DropdownTarget == plr then
+            DropdownTarget = nil
+            syncDropdown("")
+        end
+        if ActiveTarget == plr then ActiveTarget = nil end
+        task.defer(function() refreshDropdownValues(false) end)
+    end)
+
+    Players.PlayerAdded:Connect(function()
+        task.defer(function() refreshDropdownValues(false) end)
+    end)
+
+    detectUISync()
+    ensureHighlight()
+    ensureLine()
+    ensureFovCircle()
+end
 
 
 Tab:Section({
@@ -770,10 +922,8 @@ function OrbitController:DisableMouseSelection()
     Mouse.Icon = ""
 end
 
--- ====================== ĐƯỜNG KẺ ĐỎ KHI CHỌN PLAYER ======================
 local SelectedPlayer = nil
 
--- Tạo đường kẻ riêng, hoạt động độc lập với Orbit Kill
 local TargetLine = Drawing.new("Line")
 TargetLine.Thickness = 2
 TargetLine.Color = Color3.fromRGB(255, 0, 0)
@@ -804,7 +954,6 @@ TargetLineConnection = RunService.RenderStepped:Connect(function()
         TargetLine.Visible = false
     end
 end)
--- =========================================================================
 
 local function safeSetToggle(state)
     if Toggle then pcall(function() Toggle:Set(state) end) end
@@ -828,11 +977,9 @@ local Dropdown = Tab:Dropdown({
                 OrbitController:Stop()
                 OrbitController:Start(found)
             end
-            -- Đường kẻ đỏ sẽ tự động cập nhật nhờ TargetLineConnection
         else
             SelectedPlayer = nil
             if OrbitController.Enabled then OrbitController:Stop(); safeSetToggle(false) end
-            -- Đường kẻ sẽ tự biến mất vì SelectedPlayer = nil
         end
     end
 })
@@ -998,6 +1145,276 @@ if CharactersFolder then
     end
 end
 
+
+EXPTab:Section({
+    Title = "byass noclip"
+})
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local StarterGui = game:GetService("StarterGui")
+
+local Player = Players.LocalPlayer
+
+local CONFIG = {
+    TargetPosition = Vector3.new(39.6, 154.1, 132.1),
+    RespawnDelay = 1,
+    TweenTime = 0.05,
+    StableTime = 3,
+    PositionTolerance = 5,
+    CheckInterval = 0.05,
+    RetryDelay = 0.3,
+}
+
+local State = {
+    Enabled = false,
+    Running = false,
+    Cycle = 0,
+    Character = nil,
+    Humanoid = nil,
+    RootPart = nil,
+    RespawnConnection = nil,
+}
+
+local function GetCharacter()
+    local character = Player.Character
+    if character and character.Parent then
+        return character
+    end
+    return nil
+end
+
+local function GetHumanoid(character)
+    character = character or GetCharacter()
+    if not character then
+        return nil
+    end
+    return character:FindFirstChildOfClass("Humanoid")
+end
+
+local function GetRoot(character)
+    character = character or GetCharacter()
+    if not character then
+        return nil
+    end
+    return character:FindFirstChild("HumanoidRootPart")
+end
+
+local function DistanceToTarget(root)
+    if not root then
+        return math.huge
+    end
+    return (root.Position - CONFIG.TargetPosition).Magnitude
+end
+
+local function IsAtTarget(root)
+    return DistanceToTarget(root) <= CONFIG.PositionTolerance
+end
+
+local function Notify(title, text)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = 2
+        })
+    end)
+end
+
+local function UpdateCharacter(character)
+    State.Character = character
+    State.Humanoid = nil
+    State.RootPart = nil
+    if not character then
+        return
+    end
+    State.Humanoid = character:FindFirstChildOfClass("Humanoid")
+    State.RootPart = character:FindFirstChild("HumanoidRootPart")
+end
+
+local function FireReset()
+    local success = pcall(function()
+        local Knit = ReplicatedStorage:WaitForChild("Knit", 5)
+        local KnitCore = Knit:WaitForChild("Knit", 5)
+        local Services = KnitCore:WaitForChild("Services", 5)
+        local JoinService = Services:WaitForChild("JoinService", 5)
+        local RE = JoinService:WaitForChild("RE", 5)
+        local Reset = RE:WaitForChild("Reset", 5)
+        if not Reset:IsA("RemoteEvent") then
+            error("Reset is not RemoteEvent")
+        end
+        Reset:FireServer()
+    end)
+    return success
+end
+
+local function WaitForNewCharacter(oldCharacter)
+    local newCharacter
+    if Player.Character and Player.Character ~= oldCharacter then
+        newCharacter = Player.Character
+    else
+        local connection
+        local finished = false
+        connection = Player.CharacterAdded:Connect(function(character)
+            if not finished then
+                finished = true
+                newCharacter = character
+            end
+        end)
+        local start = os.clock()
+        while not newCharacter and os.clock() - start < 10 do
+            if not State.Enabled then
+                break
+            end
+            task.wait(0.05)
+        end
+        finished = true
+        connection:Disconnect()
+    end
+    if not newCharacter then
+        return nil
+    end
+    local humanoid = newCharacter:WaitForChild("Humanoid", 10)
+    local root = newCharacter:WaitForChild("HumanoidRootPart", 10)
+    if not humanoid or not root then
+        return nil
+    end
+    local start = os.clock()
+    while humanoid.Health <= 0 and os.clock() - start < 5 do
+        if not State.Enabled then
+            return nil
+        end
+        task.wait(0.05)
+    end
+    if humanoid.Health <= 0 then
+        return nil
+    end
+    UpdateCharacter(newCharacter)
+    return newCharacter
+end
+
+local function TweenToTarget(character)
+    local humanoid = GetHumanoid(character)
+    local root = GetRoot(character)
+    if not humanoid or not root then
+        return false
+    end
+    if humanoid.Health <= 0 then
+        return false
+    end
+    local target = CFrame.new(CONFIG.TargetPosition)
+    local tweenInfo = TweenInfo.new(CONFIG.TweenTime, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, 0, false, 0)
+    local success = pcall(function()
+        local tween = TweenService:Create(root, tweenInfo, { CFrame = target })
+        tween:Play()
+        tween.Completed:Wait()
+    end)
+    return success
+end
+
+local function ValidateStable(character)
+    local humanoid = GetHumanoid(character)
+    local root = GetRoot(character)
+    if not humanoid or not root then
+        return false
+    end
+    local startTime = os.clock()
+    while os.clock() - startTime < CONFIG.StableTime do
+        if not State.Enabled then
+            return false
+        end
+        if Player.Character ~= character then
+            return false
+        end
+        if humanoid.Health <= 0 then
+            return false
+        end
+        if not IsAtTarget(root) then
+            return false
+        end
+        task.wait(CONFIG.CheckInterval)
+    end
+    if Player.Character ~= character then
+        return false
+    end
+    if humanoid.Health <= 0 then
+        return false
+    end
+    return IsAtTarget(root)
+end
+
+local function ExecuteCycle()
+    State.Cycle += 1
+    local oldCharacter = GetCharacter()
+    local oldHumanoid = GetHumanoid(oldCharacter)
+    if not oldCharacter or not oldHumanoid or oldHumanoid.Health <= 0 then
+        return false
+    end
+    if not FireReset() then
+        return false
+    end
+    local newCharacter = WaitForNewCharacter(oldCharacter)
+    if not newCharacter then
+        return false
+    end
+    local delayStart = os.clock()
+    while os.clock() - delayStart < CONFIG.RespawnDelay do
+        if not State.Enabled then
+            return false
+        end
+        local humanoid = GetHumanoid(newCharacter)
+        if not humanoid or humanoid.Health <= 0 then
+            return false
+        end
+        task.wait(0.05)
+    end
+    if not TweenToTarget(newCharacter) then
+        return false
+    end
+    local root = GetRoot(newCharacter)
+    if not root then
+        return false
+    end
+    if not IsAtTarget(root) then
+        return false
+    end
+    return ValidateStable(newCharacter)
+end
+
+local function StartController()
+    if State.Running then
+        return
+    end
+    State.Running = true
+    State.Cycle = 0
+    task.spawn(function()
+        while State.Enabled do
+            local success = ExecuteCycle()
+            if success then
+                State.Enabled = false
+                Notify("✓ Auto Safe Reset", "Vị trí ổn định trong 3 giây.")
+                break
+            end
+            if State.Enabled then
+                task.wait(CONFIG.RetryDelay)
+            end
+        end
+        State.Running = false
+    end)
+end
+
+EXPTab:Toggle({
+    Title = "Auto Safe Reset",
+    Callback = function(enabled)
+        State.Enabled = enabled
+        if not enabled then
+            return
+        end
+        StartController()
+    end
+})
+
 EXPTab:Section({
     Title = "Sw hitbox"
 })
@@ -1131,7 +1548,6 @@ EXPTab:Button({
     end
 })
 
-
 SttTab:Section({
     Title = "speed"
 })
@@ -1245,65 +1661,7 @@ SttTab:Toggle({
 
 print("Infinity Jump loaded!")
 
-SttTab:Section({
-    Title = "no stun"
-})
 
-local RunService = game:GetService("RunService")
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
-
-getgenv().NoStun = false
-
-SttTab:Toggle({
-    Title = "No Stun",
-    Default = false,
-    Callback = function(state)
-        getgenv().NoStun = state
-
-        if state then
-            getgenv().NoStunConnection = RunService.Heartbeat:Connect(function()
-                local character = LocalPlayer.Character
-                if not character then return end
-                local humanoid = character:FindFirstChildOfClass("Humanoid")
-                if not humanoid then return end
-
-                if humanoid.PlatformStand == true then
-                    humanoid.PlatformStand = false
-                end
-
-                local state = humanoid:GetState()
-                if state == Enum.HumanoidStateType.FallingDown or state == Enum.HumanoidStateType.Ragdoll then
-                    humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
-                elseif state == Enum.HumanoidStateType.Frozen then
-                    humanoid:ChangeState(Enum.HumanoidStateType.Running)
-                end
-
-                humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
-                humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
-            end)
-        else
-            if getgenv().NoStunConnection then
-                getgenv().NoStunConnection:Disconnect()
-                getgenv().NoStunConnection = nil
-            end
-
-            local character = LocalPlayer.Character
-            if character then
-                local humanoid = character:FindFirstChildOfClass("Humanoid")
-                if humanoid then
-                    humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
-                    humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, true)
-                end
-            end
-        end
-    end
-})
-
-LocalPlayer.CharacterAdded:Connect(function(character)
-    if getgenv().NoStun and getgenv().NoStunConnection then
-    end
-end)
 
 SttTab:Section({
     Title = "Esp player"
@@ -1314,119 +1672,238 @@ local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 local RunService = game:GetService("RunService")
 
+-- Config
 local ESPEnabled = false
 local MAX_DISTANCE = 600
+local UPDATE_INTERVAL = 1 / 30   -- 30 FPS
+local updateTimer = 0
 local EspData = {}
 
+-- Characters folder
 local CharactersFolder = workspace:FindFirstChild("Characters")
-if not CharactersFolder then
-    warn("Không tìm thấy workspace.Characters! ESP sẽ không hoạt động.")
+local function RefreshCharactersFolder()
+    if not CharactersFolder or not CharactersFolder.Parent then
+        CharactersFolder = workspace:FindFirstChild("Characters")
+    end
+    return CharactersFolder
 end
 
+-- ScreenGui setup
+local function GetGuiParent()
+    if typeof(gethui) == "function" then
+        local success, gui = pcall(gethui)
+        if success and gui then return gui end
+    end
+    return game:GetService("CoreGui")
+end
+
+local ESPGui = Instance.new("ScreenGui")
+ESPGui.Name = "KhanhlyESP"
+ESPGui.IgnoreGuiInset = true
+ESPGui.ResetOnSpawn = false
+ESPGui.DisplayOrder = 999999
+ESPGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+pcall(function() ESPGui.Parent = GetGuiParent() end)
+
+-- Get real character
 local function GetRealCharacter(player)
-    if not CharactersFolder then return nil end
-    local char = CharactersFolder:FindFirstChild(player.Name)
-    if not char then return nil end
-    if not char:FindFirstChild("HumanoidRootPart") then return nil end
-    if not char:FindFirstChild("Head") then return nil end
-    if not char:FindFirstChildOfClass("Humanoid") then return nil end
+    local folder = RefreshCharactersFolder()
+    if not folder then return nil end
+
+    local char = folder:FindFirstChild(player.Name)
+    if not char or not char:IsA("Model") then return nil end
+    if char.Parent ~= folder then return nil end
+
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local head = char:FindFirstChild("Head")
+    if not humanoid or not root or not head then return nil end
+    if humanoid.Health <= 0 then return nil end
+    if root.Parent ~= char or head.Parent ~= char then return nil end
+
     return char
 end
 
-local function ClearPlayerESP(player)
-    local data = EspData[player]
-    if data then
-        for _, obj in pairs(data) do
-            if obj and obj.Remove then obj:Remove() end
-        end
-        EspData[player] = nil
-    end
-end
-
-local function ClearAllESP()
-    for player, _ in pairs(EspData) do
-        ClearPlayerESP(player)
-    end
-end
-
+-- Create ESP for one player
 local function CreatePlayerESP(player)
     local data = {}
 
-    local box = Drawing.new("Square")
-    box.Filled = false
-    box.Color = Color3.fromRGB(255, 0, 0)
-    box.Thickness = 2
+    -- Container
+    local container = Instance.new("Frame")
+    container.Name = "ESP_" .. player.Name
+    container.BackgroundTransparency = 1
+    container.BorderSizePixel = 0
+    container.Visible = false
+    container.Size = UDim2.fromScale(1, 1)
+    container.Position = UDim2.fromScale(0, 0)
+    container.ZIndex = 100
+    container.Parent = ESPGui
+    data.container = container
+
+    -- Box
+    local box = Instance.new("Frame")
+    box.Name = "Box"
+    box.BackgroundTransparency = 1
+    box.BorderSizePixel = 2
+    box.BorderColor3 = Color3.fromRGB(255, 0, 0)
+    box.Visible = false
+    box.ZIndex = 101
+    box.Parent = container
     data.box = box
 
-    local outline = Drawing.new("Square")
-    outline.Filled = false
-    outline.Color = Color3.fromRGB(0, 0, 0)
-    outline.Thickness = 2
+    -- Outline
+    local outline = Instance.new("Frame")
+    outline.Name = "Outline"
+    outline.BackgroundTransparency = 1
+    outline.BorderSizePixel = 2
+    outline.BorderColor3 = Color3.fromRGB(0, 0, 0)
+    outline.Visible = false
+    outline.ZIndex = 100
+    outline.Parent = container
     data.outline = outline
 
-    local bgBar = Drawing.new("Square")
-    bgBar.Filled = true
-    bgBar.Color = Color3.fromRGB(40, 40, 40)
+    -- Health background
+    local bgBar = Instance.new("Frame")
+    bgBar.Name = "HealthBackground"
+    bgBar.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    bgBar.BorderSizePixel = 0
+    bgBar.Visible = false
+    bgBar.ZIndex = 102
+    bgBar.Parent = container
     data.bgBar = bgBar
 
-    local healthBar = Drawing.new("Square")
-    healthBar.Filled = true
+    -- Health bar
+    local healthBar = Instance.new("Frame")
+    healthBar.Name = "Health"
+    healthBar.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+    healthBar.BorderSizePixel = 0
+    healthBar.Visible = false
+    healthBar.ZIndex = 103
+    healthBar.Parent = container
     data.healthBar = healthBar
 
-    local nameText = Drawing.new("Text")
-    nameText.Size = 14
-    nameText.Color = Color3.fromRGB(255, 255, 255)
-    nameText.Center = true
-    nameText.Outline = true
-    nameText.OutlineColor = Color3.fromRGB(0, 0, 0)
+    -- Name
+    local nameText = Instance.new("TextLabel")
+    nameText.Name = "Name"
+    nameText.BackgroundTransparency = 1
+    nameText.Size = UDim2.fromOffset(250, 20)
+    nameText.AnchorPoint = Vector2.new(0.5, 1)
+    nameText.Font = Enum.Font.SourceSansBold
+    nameText.TextSize = 14
+    nameText.TextColor3 = Color3.fromRGB(255, 255, 255)
+    nameText.TextStrokeTransparency = 0
+    nameText.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    nameText.TextXAlignment = Enum.TextXAlignment.Center
+    nameText.Text = player.Name
+    nameText.Visible = false
+    nameText.ZIndex = 104
+    nameText.Parent = container
     data.nameText = nameText
 
-    local distText = Drawing.new("Text")
-    distText.Size = 12
-    distText.Color = Color3.fromRGB(255, 255, 0)
-    distText.Center = true
-    distText.Outline = true
-    distText.OutlineColor = Color3.fromRGB(0, 0, 0)
+    -- Distance
+    local distText = Instance.new("TextLabel")
+    distText.Name = "Distance"
+    distText.BackgroundTransparency = 1
+    distText.Size = UDim2.fromOffset(250, 18)
+    distText.AnchorPoint = Vector2.new(0.5, 1)
+    distText.Font = Enum.Font.SourceSans
+    distText.TextSize = 12
+    distText.TextColor3 = Color3.fromRGB(255, 255, 0)
+    distText.TextStrokeTransparency = 0
+    distText.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+    distText.TextXAlignment = Enum.TextXAlignment.Center
+    distText.Visible = false
+    distText.ZIndex = 104
+    distText.Parent = container
     data.distText = distText
 
+    -- SnapLine (Drawing.Line – không dùng Frame để tránh loạn)
     local snapLine = Drawing.new("Line")
     snapLine.Color = Color3.fromRGB(255, 0, 0)
     snapLine.Thickness = 1
+    snapLine.Visible = false
     data.snapLine = snapLine
+
+    -- Highlight (Instance)
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "KhanhlyESPHighlight"
+    highlight.FillColor = Color3.fromRGB(255, 0, 0)
+    highlight.OutlineColor = Color3.fromRGB(255, 0, 0)
+    highlight.FillTransparency = 0.82
+    highlight.OutlineTransparency = 0.15
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Enabled = false
+    highlight.Parent = GetGuiParent()
+    data.highlight = highlight
+
+    -- Lưu character hiện tại để kiểm tra thay đổi
+    data.character = nil
 
     EspData[player] = data
     return data
 end
 
-local function UpdateESP()
-    if not ESPEnabled then
-        for _, data in pairs(EspData) do
-            for _, obj in pairs(data) do
-                obj.Visible = false
-            end
-        end
-        return
-    end
+-- Ẩn toàn bộ ESP của một player (không xoá)
+local function HideESP(data)
+    if not data then return end
+    if data.container then data.container.Visible = false end
+    if data.highlight then data.highlight.Enabled = false end
+    if data.snapLine then data.snapLine.Visible = false end
+end
 
-    local localRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+-- Xoá ESP khi player rời game
+local function ClearPlayerESP(player)
+    local data = EspData[player]
+    if not data then return end
+
+    if data.container then
+        pcall(function() data.container:Destroy() end)
+    end
+    if data.highlight then
+        pcall(function() data.highlight:Destroy() end)
+    end
+    if data.snapLine then
+        pcall(function() data.snapLine:Remove() end)
+    end
+    EspData[player] = nil
+end
+
+local function ClearAllESP()
+    for player in pairs(EspData) do
+        ClearPlayerESP(player)
+    end
+end
+
+-- Main update loop
+local function UpdateESP()
+    if not ESPEnabled then return end
+
+    local folder = RefreshCharactersFolder()
+    if not folder then return end
+
+    local localChar = LocalPlayer.Character
+    if not localChar then return end
+    local localRoot = localChar:FindFirstChild("HumanoidRootPart")
     if not localRoot then return end
 
     local screenSize = Camera.ViewportSize
     local snapOrigin = Vector2.new(screenSize.X / 2, screenSize.Y - 2)
 
+    local seenPlayers = {}
+
     for _, player in ipairs(Players:GetPlayers()) do
+        seenPlayers[player] = true
+
+        -- Bỏ qua chính mình
         if player == LocalPlayer then
-            if EspData[player] then
-                for _, obj in pairs(EspData[player]) do
-                    obj.Visible = false
-                end
-            end
+            if EspData[player] then HideESP(EspData[player]) end
             continue
         end
 
+        -- Lấy character thật
         local char = GetRealCharacter(player)
         if not char then
-            ClearPlayerESP(player)
+            if EspData[player] then HideESP(EspData[player]) end
             continue
         end
 
@@ -1434,108 +1911,139 @@ local function UpdateESP()
         local rootPart = char:FindFirstChild("HumanoidRootPart")
         local head = char:FindFirstChild("Head")
         if not humanoid or not rootPart or not head then
-            ClearPlayerESP(player)
+            if EspData[player] then HideESP(EspData[player]) end
             continue
         end
 
-        local data = EspData[player]
-        if not data then
-            data = CreatePlayerESP(player)
-        end
-
         if humanoid.Health <= 0 then
-            for _, obj in pairs(data) do
-                obj.Visible = false
-            end
+            if EspData[player] then HideESP(EspData[player]) end
             continue
         end
 
         local distance = (rootPart.Position - localRoot.Position).Magnitude
         if distance > MAX_DISTANCE then
-            for _, obj in pairs(data) do
-                obj.Visible = false
-            end
+            if EspData[player] then HideESP(EspData[player]) end
             continue
         end
 
-        local headPos, headVisible = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+        -- Tạo/lấy data
+        local data = EspData[player]
+        if not data then
+            data = CreatePlayerESP(player)
+        end
+
+        -- Hiện container
+        data.container.Visible = true
+
+        -- Highlight (chỉ đổi khi character thay đổi)
+        if data.character ~= char then
+            data.character = char
+            data.highlight.Adornee = char
+            data.highlight.Enabled = true
+        elseif not data.highlight.Enabled then
+            data.highlight.Enabled = true
+        end
+
+        -- SnapLine (Drawing.Line)
+        local rootScreen = Camera:WorldToViewportPoint(rootPart.Position)
+        if rootScreen.Z > 0 then
+            local targetX = math.clamp(rootScreen.X, 0, screenSize.X)
+            local targetY = math.clamp(rootScreen.Y, 0, screenSize.Y)
+            data.snapLine.Visible = true
+            data.snapLine.From = snapOrigin
+            data.snapLine.To = Vector2.new(targetX, targetY)
+        else
+            data.snapLine.Visible = false
+        end
+
+        -- Tính toán Box/Health/Name/Distance
+        local headPos = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
         local hipHeight = humanoid.HipHeight or 2
-        local feetPos, feetVisible = Camera:WorldToViewportPoint(rootPart.Position - Vector3.new(0, hipHeight + 2, 0))
+        local feetPos = Camera:WorldToViewportPoint(rootPart.Position - Vector3.new(0, hipHeight + 2, 0))
 
-        local isOnScreen = headVisible and feetVisible and headPos.Z > 0 and feetPos.Z > 0
-
-        if not isOnScreen then
+        if headPos.Z <= 0 and feetPos.Z <= 0 then
             data.box.Visible = false
             data.outline.Visible = false
             data.bgBar.Visible = false
             data.healthBar.Visible = false
             data.nameText.Visible = false
             data.distText.Visible = false
-            data.snapLine.Visible = false
             continue
         end
 
         local top = math.min(headPos.Y, feetPos.Y)
         local bottom = math.max(headPos.Y, feetPos.Y)
-        local height = bottom - top
+        local height = math.max(bottom - top, 20)
         local width = math.max(height * 0.6, 24)
         local left = headPos.X - width / 2
 
-        top = math.clamp(top, -10, screenSize.Y + 10)
-        bottom = math.clamp(bottom, -10, screenSize.Y + 10)
-        left = math.clamp(left, -10, screenSize.X + 10)
+        top = math.clamp(top, -50, screenSize.Y + 50)
+        left = math.clamp(left, -50, screenSize.X + 50)
 
+        -- Box
         data.box.Visible = true
-        data.box.Size = Vector2.new(width, height)
-        data.box.Position = Vector2.new(left, top)
-        data.box.Thickness = 2
+        data.box.Position = UDim2.fromOffset(left, top)
+        data.box.Size = UDim2.fromOffset(width, height)
 
+        -- Outline
         data.outline.Visible = true
-        data.outline.Size = data.box.Size
-        data.outline.Position = data.box.Position
-        data.outline.Thickness = 2
+        data.outline.Position = UDim2.fromOffset(left - 2, top - 2)
+        data.outline.Size = UDim2.fromOffset(width + 4, height + 4)
 
-        local healthPercent = math.max(0, humanoid.Health / humanoid.MaxHealth)
+        -- Health bar
+        local maxHealth = math.max(humanoid.MaxHealth, 1)
+        local healthPercent = math.clamp(humanoid.Health / maxHealth, 0, 1)
         local barWidth = math.clamp(height / 25, 2, 4)
         local barLeft = left - barWidth - 6
 
         data.bgBar.Visible = true
-        data.bgBar.Size = Vector2.new(barWidth, height)
-        data.bgBar.Position = Vector2.new(barLeft, top)
+        data.bgBar.Position = UDim2.fromOffset(barLeft, top)
+        data.bgBar.Size = UDim2.fromOffset(barWidth, height)
 
-        data.healthBar.Visible = true
         local fillHeight = height * healthPercent
-        local fillTop = top + (height - fillHeight)
-        data.healthBar.Size = Vector2.new(barWidth, fillHeight)
-        data.healthBar.Position = Vector2.new(barLeft, fillTop)
-        data.healthBar.Color = Color3.fromRGB(255 * (1 - healthPercent), 255 * healthPercent, 0)
+        data.healthBar.Visible = true
+        data.healthBar.Position = UDim2.fromOffset(barLeft, top + height - fillHeight)
+        data.healthBar.Size = UDim2.fromOffset(barWidth, fillHeight)
+        data.healthBar.BackgroundColor3 = Color3.fromRGB(
+            255 * (1 - healthPercent),
+            255 * healthPercent,
+            0
+        )
 
+        -- Name
         data.nameText.Visible = true
         data.nameText.Text = player.Name
-        data.nameText.Position = Vector2.new(headPos.X, top - 40)
+        data.nameText.Position = UDim2.fromOffset(headPos.X, top - 2)
 
+        -- Distance
         data.distText.Visible = true
         data.distText.Text = string.format("M:%03d", math.floor(distance))
-        data.distText.Position = Vector2.new(headPos.X, top - 22)
-
-        local snapEndX = math.clamp(headPos.X, 0, screenSize.X)
-        local snapEndY = math.clamp(bottom, 0, screenSize.Y)
-
-        data.snapLine.Visible = true
-        data.snapLine.From = snapOrigin
-        data.snapLine.To = Vector2.new(snapEndX, snapEndY)
+        data.distText.Position = UDim2.fromOffset(headPos.X, top + 16)
     end
 
-    for player, _ in pairs(EspData) do
-        if not table.find(Players:GetPlayers(), player) then
+    -- Xoá player đã rời
+    for player in pairs(EspData) do
+        if not seenPlayers[player] then
             ClearPlayerESP(player)
         end
     end
 end
 
-RunService.RenderStepped:Connect(UpdateESP)
-Players.PlayerRemoving:Connect(ClearPlayerESP)
+-- Loop với giới hạn 30 FPS
+RunService.RenderStepped:Connect(function(dt)
+    updateTimer += dt
+    if updateTimer >= UPDATE_INTERVAL then
+        updateTimer = 0
+        UpdateESP()
+    end
+end)
 
+-- Cleanup khi player rời game
+Players.PlayerRemoving:Connect(function(player)
+    ClearPlayerESP(player)
+end)
+
+-- Toggle (giữ nguyên giao diện của bạn)
 local Toggle = SttTab:Toggle({
     Title = "ESP Player",
     Callback = function(state)
@@ -1689,3 +2197,76 @@ SttTab:Slider({
         flySpeed = value
     end
 })
+
+CmTab:Section({
+    Title = "fps bos"
+})
+
+local isHiding = false
+local hiddenData = nil
+local originalParent = nil
+
+local function hideData()
+	if not isHiding then
+		return
+	end
+
+	local map = workspace:FindFirstChild("Map")
+	if not map then
+		return
+	end
+	if hiddenData then
+		return
+	end
+
+	local data = map:FindFirstChild("Data")
+	if not data then
+		return
+	end
+
+	hiddenData = data
+	originalParent = map
+
+	data.Parent = nil
+end
+
+local function restoreData()
+	if not hiddenData then
+		return
+	end
+
+	local map = workspace:FindFirstChild("Map")
+	if map then
+		hiddenData.Parent = map
+	elseif originalParent and originalParent.Parent then
+		hiddenData.Parent = originalParent
+	end
+
+	hiddenData = nil
+	originalParent = nil
+end
+
+task.spawn(function()
+	while task.wait(0.3) do
+		if isHiding and not hiddenData then
+			hideData()
+		end
+	end
+end)
+
+CmTab:Toggle({
+	Title = "delete fragmented parts",
+	Desc = "xoá part tăng hiệu năng",
+	Value = false,
+
+	Callback = function(value)
+		isHiding = value
+
+		if value then
+			hideData()
+		else
+			restoreData()
+		end
+	end,
+})
+
